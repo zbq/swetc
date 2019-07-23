@@ -24,26 +24,9 @@
   [file-path]
   (line-count-of-file (io/file file-path)))
 
-(defmulti line-count-of-dir
-  "glob file by extensions, get line count of each file, return the sum."
-  (fn [dir exts]
-    (class dir)))
-
-(defmethod line-count-of-dir java.io.File
-  [dir-obj exts]
-  (reduce +
-          (for [f (.listFiles dir-obj) :let [f-name (.getName f)]]
-            (if (.isDirectory f)
-              (line-count-of-dir f exts)
-              (if (and (some #(.equalsIgnoreCase (FilenameUtils/getExtension f-name) %) exts)
-                       (not= f-name "CMakeCCompilerId.c")
-                       (not= f-name "CMakeCXXCompilerId.cpp"))
-                (line-count-of-file f)
-                0)))))
-
-(defmethod line-count-of-dir String
-  [dir-path exts]
-  (line-count-of-dir (io/file dir-path) exts))
+(defn line-count-of-files
+  [files]
+  (reduce + (map line-count-of-file files)))
 
 (defmulti glob-by-file-exts
   "glob by file extensions."
@@ -132,16 +115,19 @@
 
 (defn- parse-proj-file
   "return a map with keys: TargetName, TargetType(staticlibrary/library/exe), Dependencies."
-  [file-path hook]
+  [file-path hook & props]
+  (assert (= (mod (count props) 2) 0))
   (let [content (slurp file-path)
         index (string/last-index-of content "</Project>")
         tmp-proj-file-path (str file-path "-swetc-tmp")
         tmp-content (str (subs content 0 index) hook "</Project>")
         _ (spit tmp-proj-file-path tmp-content)
         res (try
-              (shell/sh "msbuild" tmp-proj-file-path
-                        "/nologo" "/v:minimal" "/p:Configuration=Release"
-                        "/t:SWETC-PARSE")
+              (apply shell/sh "msbuild" tmp-proj-file-path
+                     "/nologo" "/v:minimal" "/t:SWETC-PARSE"
+                     "/p:Configuration=Release" ; default property, could be override
+                     (for [[p v] (partition 2 props)]
+                       (str "/p:" p "=" v)))
               (finally (io/delete-file tmp-proj-file-path true)))
         xml-doc (xml-doc-from-string (:out res))
         target-name (.getTextContent
@@ -155,16 +141,17 @@
                                 (eval-xpath xml-doc "//SWETC/Dependencies")))
               #"[;\n]")
         deps (map #(string/trim %) deps)
-        deps (set (map #(if (string/ends-with? % ".lib")
-                          (subs % 0 (- (.length %) 4))
-                          %) deps))]
+        deps (apply sorted-set
+                    (map #(if (string/ends-with? % ".lib")
+                            (subs % 0 (- (.length %) 4))
+                            %) deps))]
     {:TargetName target-name
      :TargetType target-type
      :Dependencies deps}))
 
 (defn parse-vcxproj-file
-  [file-path]
-  (parse-proj-file file-path "
+  [file-path & props]
+  (apply parse-proj-file file-path "
 <ItemGroup>
     <Link Include='Whatever' />
 </ItemGroup>
@@ -174,25 +161,28 @@
     <Message Text='&lt;TargetType&gt;$(OutputType)&lt;/TargetType&gt;' Importance='High' />
     <Message Text='&lt;Dependencies&gt;%(Link.AdditionalDependencies)&lt;/Dependencies&gt;' Importance='High' />
     <Message Text='&lt;/SWETC&gt;' Importance='High' />
-</Target>"))
+</Target>
+" "Platform" "x64" props))
 
 (defn parse-csproj-file
-  [file-path]
-  (let [res (parse-proj-file file-path "
+  [file-path & props]
+  (let [res (apply parse-proj-file file-path "
 <Target Name='SWETC-PARSE'>
     <Message Text='&lt;SWETC&gt;' Importance='High' />
     <Message Text='&lt;TargetName&gt;$(TargetName)&lt;/TargetName&gt;' Importance='High' />
     <Message Text='&lt;TargetType&gt;$(OutputType)&lt;/TargetType&gt;' Importance='High' />
     <Message Text='&lt;Dependencies&gt;@(Reference)&lt;/Dependencies&gt;' Importance='High' />
     <Message Text='&lt;/SWETC&gt;' Importance='High' />
-</Target>")
+</Target>
+" "Platform" "AnyCPU" props)
         target-type (string/lower-case (:TargetType res))
         target-type (if (= target-type "winexe")
                       "exe"
                       target-type)
         deps (:Dependencies res)
         ;; handle something like: Microsoft.Expression.Drawing, Version=4.0.0.0, Culture=neutral...
-        deps (set (map #(string/trim (first (string/split % #"[,]"))) deps))]
+        deps (apply sorted-set
+                    (map #(string/trim (first (string/split % #"[,]"))) deps))]
     (assoc res :TargetType target-type :Dependencies deps)))
 
 (defn parse-cmake-file
@@ -219,12 +209,13 @@
         (conj! deps (nthrest invoc 2))))
     {:TargetName @target-name
      :TargetType @target-type
-     :Dependencies (set (filter #(not= % "PRIVATE")
-                                (map #(if (and (string/starts-with? % "lib")
-                                               (string/ends-with? % ".so"))
-                                        (subs % 3 (- (.length %) 3))
-                                        %)
-                                     (flatten (persistent! deps)))))}
+     :Dependencies (apply sorted-set
+                          (filter #(not= % "PRIVATE")
+                                  (map #(if (and (string/starts-with? % "lib")
+                                                 (string/ends-with? % ".so"))
+                                          (subs % 3 (- (.length %) 3))
+                                          %)
+                                       (flatten (persistent! deps)))))}
     ))
 
 (defn tf-checkout
@@ -239,8 +230,36 @@
   [file-path]
   (shell/sh "tf" "undo" "/noprompt" file-path))
 
-(defn -main
-  "I don't do a whole lot ... yet."
-  [& args]
-  (println "Hello, World!"))
+(def cmdlets {})
+(defmacro defcmdlet
+  [cmd help & body]
+  `(alter-var-root (var cmdlets)
+                   #(assoc %1 %2 %3)
+                   '~cmd
+                   {:help ~help, :fn (fn ~@body)}))
 
+(defcmdlet line-count
+  "<file-path>  -- line count of file.
+    <dir-path> [ext1 ext2 ...]  --  line count of files in directory."
+  [path & exts]
+  (if (.isFile (io/file path))
+    (println (line-count-of-file path))
+    (if (.isDirectory (io/file path))
+      (println (line-count-of-files (glob-by-file-exts path (set exts))))
+      (println "not a valid file or directory."))))
+
+(defcmdlet help
+  "print this help."
+  []
+  (println "Available tools:")
+  (doseq [[cmd {help :help}] cmdlets]
+    (println cmd)
+    (println "   " help)))
+
+(defn -main
+  [& args]
+  (if (or (< (count args) 1)
+          (not (get cmdlets (symbol (first args)))))
+    ((:fn (get cmdlets 'help)))
+    (apply (:fn (get cmdlets (symbol (first args)))) (nthrest args 1)))
+  (shutdown-agents))
