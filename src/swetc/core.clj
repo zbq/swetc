@@ -116,7 +116,6 @@
 (defn- parse-proj-file
   "return a map with keys: TargetName, TargetType(staticlibrary/library/exe), Dependencies."
   [file-path hook & props]
-  (assert (= (mod (count props) 2) 0))
   (let [content (slurp file-path)
         index (string/last-index-of content "</Project>")
         tmp-proj-file-path (str file-path "-swetc-tmp")
@@ -125,9 +124,8 @@
         res (try
               (apply shell/sh "msbuild" tmp-proj-file-path
                      "/nologo" "/v:minimal" "/t:SWETC-PARSE"
-                     "/p:Configuration=Release" ; default property, could be override
-                     (for [[p v] (partition 2 props)]
-                       (str "/p:" p "=" v)))
+                     (for [[name val] (apply hash-map props)]
+                       (str "/p:" name "=" val)))
               (finally (io/delete-file tmp-proj-file-path true)))
         xml-doc (xml-doc-from-string (:out res))
         target-name (.getTextContent
@@ -139,7 +137,7 @@
         deps (string/split
               (.getTextContent (only-one-node
                                 (eval-xpath xml-doc "//SWETC/Dependencies")))
-              #"[;\n]")
+              #"[; \n]")
         deps (map #(string/trim %) deps)
         deps (apply sorted-set
                     (map #(if (string/ends-with? % ".lib")
@@ -162,7 +160,7 @@
     <Message Text='&lt;Dependencies&gt;%(Link.AdditionalDependencies)&lt;/Dependencies&gt;' Importance='High' />
     <Message Text='&lt;/SWETC&gt;' Importance='High' />
 </Target>
-" "Platform" "x64" props))
+" "Configuration" "Release" "Platform" "x64" props))
 
 (defn parse-csproj-file
   [file-path & props]
@@ -174,15 +172,14 @@
     <Message Text='&lt;Dependencies&gt;@(Reference)&lt;/Dependencies&gt;' Importance='High' />
     <Message Text='&lt;/SWETC&gt;' Importance='High' />
 </Target>
-" "Platform" "AnyCPU" props)
+" "Configuration" "Release" "Platform" "AnyCPU" props)
         target-type (string/lower-case (:TargetType res))
         target-type (if (= target-type "winexe")
                       "exe"
                       target-type)
         deps (:Dependencies res)
         ;; handle something like: Microsoft.Expression.Drawing, Version=4.0.0.0, Culture=neutral...
-        deps (apply sorted-set
-                    (map #(string/trim (first (string/split % #"[,]"))) deps))]
+        deps (apply sorted-set (map #(string/trim (first (string/split % #"[,]"))) deps))]
     (assoc res :TargetType target-type :Dependencies deps)))
 
 (defn parse-cmake-file
@@ -196,7 +193,7 @@
       (cond
         (.equalsIgnoreCase "SET" (first invoc))
         (assoc! bindings (second invoc)
-                (cmake-parser/expand-argument (nth invoc 2) bindings))
+                (cmake-parser/expand-argument (nth invoc 2 "") bindings)) ;; SET(xxx )
         (.equalsIgnoreCase "ADD_EXECUTABLE" (first invoc))
         (do (reset! target-type "exe")
             (reset! target-name (cmake-parser/expand-argument (second invoc) bindings)))
@@ -209,13 +206,15 @@
         (conj! deps (nthrest invoc 2))))
     {:TargetName @target-name
      :TargetType @target-type
-     :Dependencies (apply sorted-set
-                          (filter #(not= % "PRIVATE")
-                                  (map #(if (and (string/starts-with? % "lib")
-                                                 (string/ends-with? % ".so"))
-                                          (subs % 3 (- (.length %) 3))
-                                          %)
-                                       (flatten (persistent! deps)))))}
+     :Dependencies (-> (apply sorted-set
+                              (map #(if (and (string/starts-with? % "lib")
+                                             (string/ends-with? % ".so"))
+                                      (subs % 3 (- (.length %) 3))
+                                      %)
+                                   (flatten (persistent! deps))))
+                       (disj "PRIVATE")
+                       (disj "PUBLIC")
+                       (disj "INTERFACE"))}
     ))
 
 (defn tf-checkout
@@ -233,20 +232,67 @@
 (def cmdlets {})
 (defmacro defcmdlet
   [cmd help & body]
-  `(alter-var-root (var cmdlets)
-                   #(assoc %1 %2 %3)
-                   '~cmd
+  `(alter-var-root (var cmdlets) #(assoc %1 %2 %3) '~cmd
                    {:help ~help, :fn (fn ~@body)}))
 
 (defcmdlet line-count
-  "<file-path>  -- line count of file.
-    <dir-path> [ext1 ext2 ...]  --  line count of files in directory."
+  "<file-path>  --  line count of file.
+    <dir-path> [ext1 ext2 ...]  --  line count of files in directory (glob by file extensions)."
   [path & exts]
-  (if (.isFile (io/file path))
-    (println (line-count-of-file path))
-    (if (.isDirectory (io/file path))
-      (println (line-count-of-files (glob-by-file-exts path (set exts))))
-      (println "not a valid file or directory."))))
+  (let [obj (io/file path) exts (set exts)]
+    (if (.isDirectory obj)
+      (println (line-count-of-files (glob-by-file-exts obj exts)))
+      (if (.isFile obj)
+        (println (line-count-of-file obj))
+        (println "not a file or directory.")))))
+
+(defcmdlet parse-csproj
+  "<dir-path> [<P1> <V1> <P2> <V2> ...]  --  parse *.csproj in directory."
+  [dir-path & props]
+  (doseq [file (csproj-files dir-path)
+          :let [proj-path (.getPath file)
+                res (try
+                      (apply parse-csproj-file file props)
+                      (catch Exception e (println "***error parsing:" proj-path)))]
+          :when res]
+    (println proj-path)
+    (println "TargetName:" (:TargetName res))
+    (println "TargetType:" (:TargetType res))
+    (println "Dependencies:")
+    (doseq [dep (:Dependencies res)]
+      (println "   " dep))))
+
+(defcmdlet parse-vcxproj
+  "<dir-path> [<P1> <V1> <P2> <V2> ...]  --  parse *.vcxproj in directory."
+  [dir-path & props]
+  (doseq [file (vcxproj-files dir-path)
+          :let [proj-path (.getPath file)
+                res (try
+                      (apply parse-vcxproj-file file props)
+                      (catch Exception e (println "***error parsing:" proj-path)))]
+          :when res]
+    (println proj-path)
+    (println "TargetName:" (:TargetName res))
+    (println "TargetType:" (:TargetType res))
+    (println "Dependencies:")
+    (doseq [dep (:Dependencies res)]
+      (println "   " dep))))
+
+(defcmdlet parse-cmake
+  "<dir-path>  --  parse CMakeLists.txt in directory."
+  [dir-path]
+  (doseq [file (cmake-files dir-path)
+          :let [proj-path (.getPath file)
+                res (try
+                      (parse-cmake-file file)
+                      (catch Exception e (println "***error parsing:" proj-path)))]
+          :when res]
+    (println proj-path)
+    (println "TargetName:" (:TargetName res))
+    (println "TargetType:" (:TargetType res))
+    (println "Dependencies:")
+    (doseq [dep (:Dependencies res)]
+      (println "   " dep))))
 
 (defcmdlet help
   "print this help."
@@ -263,3 +309,4 @@
     ((:fn (get cmdlets 'help)))
     (apply (:fn (get cmdlets (symbol (first args)))) (nthrest args 1)))
   (shutdown-agents))
+
