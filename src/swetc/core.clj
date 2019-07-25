@@ -137,7 +137,7 @@
         deps (string/split
               (.getTextContent (only-one-node
                                 (eval-xpath xml-doc "//SWETC/Dependencies")))
-              #"[; \n]")
+              #"[;\n]")
         deps (map #(string/trim %) deps)
         deps (apply sorted-set
                     (map #(if (string/ends-with? % ".lib")
