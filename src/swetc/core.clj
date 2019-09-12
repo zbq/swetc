@@ -243,9 +243,9 @@
     (if (.isDirectory obj)
       (if (empty? exts)
         (println "what kind of files to count?")
-        (println (line-count-of-files (glob-by-file-exts obj exts)) ":" (.getName obj)))
+        (println (.getName obj) ":" (line-count-of-files (glob-by-file-exts obj exts))))
       (if (.isFile obj)
-        (println (line-count-of-file obj)  ":" (.getName obj))
+        (println (.getName obj) ":" (line-count-of-file obj))
         (println "not a file or directory.")))))
 
 (defcmdlet parse-csproj
