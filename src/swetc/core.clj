@@ -241,7 +241,9 @@
   [path & exts]
   (let [obj (io/file path) exts (set exts)]
     (if (.isDirectory obj)
-      (println (line-count-of-files (glob-by-file-exts obj exts)))
+      (if (empty? exts)
+        (println "what kind of files to count?")
+        (println (line-count-of-files (glob-by-file-exts obj exts))))
       (if (.isFile obj)
         (println (line-count-of-file obj))
         (println "not a file or directory.")))))
