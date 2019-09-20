@@ -18,7 +18,7 @@
   (try
     (with-open [rdr (io/reader file-obj)]
       (count (line-seq rdr)))
-    (catch Exception e 0)))
+    (catch Exception _ 0)))
 
 (defmethod line-count-of-file String
   [file-path]
@@ -28,63 +28,64 @@
   [files]
   (reduce + (map line-count-of-file files)))
 
-(defmulti glob-by-file-exts
-  "glob by file extensions."
-  (fn [dir exts]
+(defn- list-files
+  [recursive dir-obj]
+  (filter #(.isFile %)
+          (if recursive
+            (file-seq dir-obj)
+            (.listFiles dir-obj))))
+
+(defmulti glob-by-file-ext
+  "glob by file extension."
+  (fn [recursive dir exts]
     (class dir)))
 
-(defmethod glob-by-file-exts java.io.File
-  [dir-obj exts]
-  (let [files (filter #(.isFile %) (file-seq dir-obj))]
-    (for [file files
-          :let [ext (FilenameUtils/getExtension (.getName file))]
-          :when (some #(.equalsIgnoreCase ext %) exts)]
-      file)))
+(defmethod glob-by-file-ext java.io.File
+  [recursive dir-obj exts]
+  (for [file (list-files recursive dir-obj)
+        :let [ext (FilenameUtils/getExtension (.getName file))]
+        :when (some #(.equalsIgnoreCase ext %) exts)]
+    file))
 
-(defmethod glob-by-file-exts String
-  [dir-path exts]
-  (glob-by-file-exts (io/file dir-path) exts))
+(defmethod glob-by-file-ext String
+  [recursive dir-path exts]
+  (glob-by-file-ext recursive (io/file dir-path) exts))
+
+(defn- file-name-match?
+  [file-name matcher]
+  (if (instance? String matcher)
+    ;; wildcard
+    (FilenameUtils/wildcardMatchOnSystem file-name matcher)
+    ;; regex pattern
+    (re-matches matcher file-name)))
 
 (defmulti glob-by-file-name
   "glob by file name wildcard or regex pattern."
-  (fn [dir file-name]
-    [(class dir) (class file-name)]))
+  (fn [recursive dir matchers]
+    (class dir)))
 
-(defmethod glob-by-file-name [java.io.File String]
-  [dir-obj wildcard]
-  (let [files (filter #(.isFile %) (file-seq dir-obj))]
-    (filter #(-> %
-                 .getName
-                 (FilenameUtils/wildcardMatchOnSystem wildcard))
-            files)))
+(defmethod glob-by-file-name java.io.File
+  [recursive dir-obj matchers]
+  (for [file (list-files recursive dir-obj)
+        :let [file-name (.getName file)]
+        :when (some #(file-name-match? file-name %) matchers)]
+    file))
 
-(defmethod glob-by-file-name [java.io.File java.util.regex.Pattern]
-  [dir-obj regex]
-  (let [files (filter #(.isFile %) (file-seq dir-obj))]
-    (filter #(->> %
-                 .getName
-                 (re-matches regex))
-            files)))
-
-(defmethod glob-by-file-name [String String]
-  [dir-path wildcard]
-  (glob-by-file-name (io/file dir-path) wildcard))
-
-(defmethod glob-by-file-name [String java.util.regex.Pattern]
-  [dir-path regex]
-  (glob-by-file-name (io/file dir-path) regex))
+(defmethod glob-by-file-name String
+  [recursive dir-path matchers]
+  (glob-by-file-name recursive (io/file dir-path) matchers))
 
 (defn cmake-files
   [dir-path]
-  (glob-by-file-name dir-path "CMakeLists.txt"))
+  (glob-by-file-name true dir-path #{"CMakeLists.txt"}))
 
 (defn vcxproj-files
   [dir-path]
-  (glob-by-file-exts dir-path #{"vcxproj"}))
+  (glob-by-file-ext true dir-path #{"vcxproj"}))
 
 (defn csproj-files
   [dir-path]
-  (glob-by-file-exts dir-path #{"csproj"}))
+  (glob-by-file-ext true dir-path #{"csproj"}))
 
 (defn- xml-doc-from-file
   [file-path]
@@ -137,7 +138,7 @@
         deps (string/split
               (.getTextContent (only-one-node
                                 (eval-xpath xml-doc "//SWETC/Dependencies")))
-              #"[;\n]")
+              #"[; \n]")
         deps (map #(string/trim %) deps)
         deps (apply sorted-set
                     (map #(if (string/ends-with? % ".lib")
@@ -231,31 +232,33 @@
 
 (def cmdlets {})
 (defmacro defcmdlet
-  [cmd help & body]
+  [cmd brief detail & body]
   `(alter-var-root (var cmdlets) #(assoc %1 %2 %3) '~cmd
-                   {:help ~help, :fn (fn ~@body)}))
+                   {:brief ~brief, :detail ~detail, :fn (fn ~@body)}))
 
 (defcmdlet line-count
-  "<file-path>  --  line count of file.
-    <dir-path> [ext1 ext2 ...]  --  line count of files in directory (glob by file extensions)."
-  [path & exts]
-  (let [obj (io/file path) exts (set exts)]
-    (if (.isDirectory obj)
-      (if (empty? exts)
-        (println "what kind of files to count?")
-        (println (.getName obj) ":" (line-count-of-files (glob-by-file-exts obj exts))))
-      (if (.isFile obj)
-        (println (.getName obj) ":" (line-count-of-file obj))
-        (println "not a file or directory.")))))
+  "Line count of files in directory."
+  "Usage: line-count [-r] <dir-path> <wildcard1> [wildcard2 ...]
+  --  recursively if -r specified."
+  [& args]
+  (when (or (< (count args) 2)
+            (and (= "-r" (first args)) (< (count args) 3)))
+    (throw (java.lang.IllegalArgumentException.)))
+  (let [recursive (= "-r" (first args))
+        args (if recursive (rest args) args)
+        [dir-path & wildcards] args]
+    (println (line-count-of-files (glob-by-file-name recursive dir-path wildcards)))))
 
 (defcmdlet parse-csproj
-  "<dir-path> [<P1> <V1> <P2> <V2> ...]  --  parse *.csproj in directory."
+  "Parse C# project files(*.csproj) in directory."
+  "Usage: parse-csproj <dir-path> [Property Value ...]
+  --  you can provide additional property and value such as Platform AnyCPU."
   [dir-path & props]
   (doseq [file (csproj-files dir-path)
           :let [proj-path (.getPath file)
                 res (try
                       (apply parse-csproj-file file props)
-                      (catch Exception e (println "***error parsing:" proj-path)))]
+                      (catch Exception _ (println "Error parsing:" proj-path)))]
           :when res]
     (println proj-path)
     (println "TargetName:" (:TargetName res))
@@ -265,13 +268,15 @@
       (println "   " dep))))
 
 (defcmdlet parse-vcxproj
-  "<dir-path> [<P1> <V1> <P2> <V2> ...]  --  parse *.vcxproj in directory."
+  "Parse C++ project files(*.vcxproj) in directory."
+  "Usage: parse-vcxproj <dir-path> [Property Value ...]
+  --  you can provide additional property and value such as Platform x64."
   [dir-path & props]
   (doseq [file (vcxproj-files dir-path)
           :let [proj-path (.getPath file)
                 res (try
                       (apply parse-vcxproj-file file props)
-                      (catch Exception e (println "***error parsing:" proj-path)))]
+                      (catch Exception _ (println "Error parsing:" proj-path)))]
           :when res]
     (println proj-path)
     (println "TargetName:" (:TargetName res))
@@ -281,13 +286,14 @@
       (println "   " dep))))
 
 (defcmdlet parse-cmake
-  "<dir-path>  --  parse CMakeLists.txt in directory."
+  "Parse CMakeLists.txt files in directory."
+  "Usage: parse-cmake <dir-path>"
   [dir-path]
   (doseq [file (cmake-files dir-path)
           :let [proj-path (.getPath file)
                 res (try
                       (parse-cmake-file file)
-                      (catch Exception e (println "***error parsing:" proj-path)))]
+                      (catch Exception _ (println "Error parsing:" proj-path)))]
           :when res]
     (println proj-path)
     (println "TargetName:" (:TargetName res))
@@ -297,18 +303,28 @@
       (println "   " dep))))
 
 (defcmdlet help
-  "print this help."
-  []
-  (println "Available tools:")
-  (doseq [[cmd {help :help}] cmdlets]
-    (println cmd)
-    (println "   " help)))
+  "Print this help."
+  "Usage: help [tool]"
+  ([]
+   (println "Available tools:")
+   (doseq [[name {brief :brief}] cmdlets]
+     (println name " -- " brief)))
+  ([name]
+   (if-let [cmdlet (cmdlets (symbol name))]
+     (do
+       (println (:brief cmdlet))
+       (println (:detail cmdlet)))
+     (println "Unknown tool"))))
 
 (defn -main
   [& args]
-  (if (or (< (count args) 1)
-          (not (get cmdlets (symbol (first args)))))
-    ((:fn (get cmdlets 'help)))
-    (apply (:fn (get cmdlets (symbol (first args)))) (nthrest args 1)))
+  (if (or (== (count args) 0)
+          (not (cmdlets (symbol (first args)))))
+    ;; if no tool provided or tool not found, print help
+    ((:fn (cmdlets 'help)))
+    (try
+      (apply (:fn (cmdlets (symbol (first args)))) (nthrest args 1))
+      (catch java.lang.IllegalArgumentException _
+        ((:fn (cmdlets 'help)) (first args)))))
   (shutdown-agents))
 
