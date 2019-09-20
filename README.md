@@ -5,6 +5,12 @@ Software Engineering Tool Collection
 ## Usage
 
 $ java -jar swetc-0.1.0-standalone.jar [args]
+Available tools:
+line-count  --  Line count of files in directory.
+parse-csproj  --  Parse C# project files(*.csproj) in directory.
+parse-vcxproj  --  Parse C++ project files(*.vcxproj) in directory.
+parse-cmake  --  Parse CMakeLists.txt files in directory.
+help  --  Print this help.
 
 ## Options
 
