@@ -230,16 +230,7 @@
   [file-path]
   (shell/sh "tf" "undo" "/noprompt" file-path))
 
-(def cmdlets {})
-(defmacro defcmdlet
-  [cmd brief detail & body]
-  `(alter-var-root (var cmdlets) #(assoc %1 %2 %3) '~cmd
-                   {:brief ~brief, :detail ~detail, :fn (fn ~@body)}))
-
-(defcmdlet line-count
-  "Line count of files in directory."
-  "Usage: line-count [-r] <dir-path> <wildcard1> [wildcard2 ...]
-  --  recursively if -r specified."
+(defn line-count
   [& args]
   (when (or (< (count args) 2)
             (and (= "-r" (first args)) (< (count args) 3)))
@@ -249,10 +240,7 @@
         [dir-path & wildcards] args]
     (println (line-count-of-files (glob-by-file-name recursive dir-path wildcards)))))
 
-(defcmdlet parse-csproj
-  "Parse C# project files(*.csproj) in directory."
-  "Usage: parse-csproj <dir-path> [Property Value ...]
-  --  you can provide additional property and value such as Platform AnyCPU."
+(defn parse-csproj
   [dir-path & props]
   (doseq [file (csproj-files dir-path)
           :let [proj-path (.getPath file)
@@ -267,10 +255,7 @@
     (doseq [dep (:Dependencies res)]
       (println "   " dep))))
 
-(defcmdlet parse-vcxproj
-  "Parse C++ project files(*.vcxproj) in directory."
-  "Usage: parse-vcxproj <dir-path> [Property Value ...]
-  --  you can provide additional property and value such as Platform x64."
+(defn parse-vcxproj
   [dir-path & props]
   (doseq [file (vcxproj-files dir-path)
           :let [proj-path (.getPath file)
@@ -285,9 +270,7 @@
     (doseq [dep (:Dependencies res)]
       (println "   " dep))))
 
-(defcmdlet parse-cmake
-  "Parse CMakeLists.txt files in directory."
-  "Usage: parse-cmake <dir-path>"
+(defn parse-cmake
   [dir-path]
   (doseq [file (cmake-files dir-path)
           :let [proj-path (.getPath file)
@@ -302,29 +285,52 @@
     (doseq [dep (:Dependencies res)]
       (println "   " dep))))
 
-(defcmdlet help
-  "Print this help."
-  "Usage: help [tool]"
+(def cmdlets)
+
+(defn help
   ([]
    (println "Available tools:")
    (doseq [[name {brief :brief}] cmdlets]
      (println name " -- " brief)))
   ([name]
-   (if-let [cmdlet (cmdlets (symbol name))]
+   (if-let [cmdlet (cmdlets name)]
      (do
        (println (:brief cmdlet))
-       (println (:detail cmdlet)))
+       (println (:usage cmdlet)))
      (println "Unknown tool"))))
+
+(def cmdlets
+  {"line-count"
+   {:brief "Line count of files in directory."
+    :usage "Usage: line-count [-r] <dir-path> <wildcard1> [wildcard2 ...]  --  recursively if -r specified."
+    :fn line-count}
+   "parse-csproj"
+   {:brief "Parse C# project files(*.csproj) in directory."
+    :usage "Usage: parse-csproj <dir-path> [Property Value ...]  --  you can provide additional property and value such as Platform AnyCPU."
+    :fn parse-csproj}
+   "parse-vcxproj"
+   {:brief "Parse C++ project files(*.vcxproj) in directory."
+    :usage "Usage: parse-vcxproj <dir-path> [Property Value ...]  --  you can provide additional property and value such as Platform x64."
+    :fn parse-vcxproj}
+   "parse-cmake"
+   {:brief "Parse CMakeLists.txt files in directory."
+    :usage "Usage: parse-cmake <dir-path>"
+    :fn parse-cmake}
+   "help"
+   {:brief "Print this help."
+    :usage "Usage: help [tool]"
+    :fn help}
+   })
 
 (defn -main
   [& args]
   (if (or (== (count args) 0)
-          (not (cmdlets (symbol (first args)))))
+          (not (cmdlets (first args))))
     ;; if no tool provided or tool not found, print help
-    ((:fn (cmdlets 'help)))
+    (help)
     (try
-      (apply (:fn (cmdlets (symbol (first args)))) (nthrest args 1))
+      (apply (:fn (cmdlets (first args))) (nthrest args 1))
       (catch java.lang.IllegalArgumentException _
-        ((:fn (cmdlets 'help)) (first args)))))
+        (help (first args)))))
   (shutdown-agents))
 
