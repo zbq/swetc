@@ -5,7 +5,8 @@
             [cmake-parser.core :as cmake-parser])
   (:import [org.apache.commons.io FilenameUtils]
            [javax.xml.xpath XPathFactory XPath XPathConstants]
-           [javax.xml.parsers DocumentBuilderFactory])
+           [javax.xml.parsers DocumentBuilderFactory]
+           [java.io IOException])
   (:gen-class))
 
 
@@ -127,6 +128,9 @@
                      "/nologo" "/v:minimal" "/t:SWETC-PARSE"
                      (for [[name val] (apply hash-map props)]
                        (str "/p:" name "=" val)))
+              (catch IOException e (do
+                                     (println "No msbuild found!")
+                                     (throw e)))
               (finally (io/delete-file tmp-proj-file-path true)))
         xml-doc (xml-doc-from-string (:out res))
         target-name (.getTextContent
@@ -220,15 +224,27 @@
 
 (defn tf-checkout
   [file-path]
-  (shell/sh "tf" "checkout" file-path))
+  (try
+    (shell/sh "tf" "checkout" file-path)
+    (catch IOException e (do
+                           (println "No tf found!")
+                           (throw e)))))
 
 (defn tf-rename
   [from to]
-  (shell/sh "tf" "rename" from to))
+  (try
+    (shell/sh "tf" "rename" from to)
+    (catch IOException e (do
+                           (println "No tf found!")
+                           (throw e)))))
 
 (defn tf-undo
   [file-path]
-  (shell/sh "tf" "undo" "/noprompt" file-path))
+  (try
+    (shell/sh "tf" "undo" "/noprompt" file-path)
+    (catch IOException e (do
+                           (println "No tf found!")
+                           (throw e)))))
 
 (defn line-count
   [& args]
@@ -285,7 +301,7 @@
     (doseq [dep (:Dependencies res)]
       (println "   " dep))))
 
-(def cmdlets)
+(declare cmdlets)
 
 (defn help
   ([]
