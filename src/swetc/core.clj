@@ -132,7 +132,10 @@
                                      (println "No msbuild found!")
                                      (throw e)))
               (finally (io/delete-file tmp-proj-file-path true)))
-        xml-doc (xml-doc-from-string (:out res))
+        res (:out res)
+        res (subs res (string/index-of res "<SWETC>")
+                  (+ (string/index-of res "</SWETC>") 8))
+        xml-doc (xml-doc-from-string res)
         target-name (.getTextContent
                      (only-one-node
                       (eval-xpath xml-doc "//SWETC/TargetName")))
