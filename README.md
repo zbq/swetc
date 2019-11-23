@@ -3,7 +3,7 @@
 Software Engineering Tool Collection
 
 ## Usage
-
+```
 $ java -jar swetc-0.1.0-standalone.jar [args]
 
     Available tools:
@@ -12,7 +12,7 @@ $ java -jar swetc-0.1.0-standalone.jar [args]
     parse-vcxproj  --  Parse C++ project files(*.vcxproj) in directory.
     parse-cmake  --  Parse CMakeLists.txt files in directory.
     help  --  Print this help.
-
+```
 ## Options
 
 FIXME: listing of options this app accepts.
