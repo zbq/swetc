@@ -225,6 +225,78 @@
                        (disj "INTERFACE"))}
     ))
 
+(defn path-normalize
+  [path]
+  (.getCanonicalPath (io/file path)))
+
+(defn path-file-name
+  [path]
+  (.getName (io/file path)))
+
+(defn parse-vcxproj-files
+  [file-paths & props]
+  (apply hash-map
+         (flatten (for [file-path (distinct
+                                   (for [f file-paths]
+                                     (path-normalize f)))
+                        :let [info (try
+                                     (apply parse-vcxproj-file file-path props)
+                                     (catch Exception _ nil))]
+                        :when info]
+                    (list file-path info)))))
+
+(defn parse-csproj-files
+  [file-paths & props]
+  (apply hash-map
+         (flatten (for [file-path (distinct
+                                   (for [f file-paths]
+                                     (path-normalize f)))
+                        :let [info (try
+                                     (apply parse-csproj-file file-path props)
+                                     (catch Exception _ nil))]
+                        :when info]
+                    (list file-path info)))))
+
+(defn parse-cmake-files
+  [file-paths]
+  (apply hash-map
+         (flatten (for [file-path (distinct
+                                   (for [f file-paths]
+                                     (path-normalize f)))
+                        :let [info (try
+                                     (apply parse-cmake-file file-path)
+                                     (catch Exception _ nil))]
+                        :when info]
+                    (list file-path info)))))
+
+(defn- find-cyclic-dep1
+  [dep-stack dep]
+  (loop [i (dec (count dep-stack))]
+    (when (>= i 0)
+      (if (= (nth dep-stack i) dep)
+        (atom (subvec dep-stack i))
+        (recur (dec i))))))
+
+(defn- find-cyclic-dep2
+  [dep-stack k->direct-deps]
+  (for [dep (k->direct-deps (last dep-stack))]
+    (if-let [cyc (find-cyclic-dep1 dep-stack dep)]
+      cyc
+      (find-cyclic-dep2 (conj dep-stack dep) k->direct-deps))))
+
+;; {a #{b}, b #{c}, c #{a}} => ([a b c] [b c a] [c a b])
+;; [a b c] => (a b c a) => ((a b) (b c) (c a)) => (a b b c c a) => {a b, b c, c a}
+;; => {{a b, b c, c a} [[a b c] [b c a] [c a b]]} => [a b c]
+(defn find-cyclic-dependencies
+  [k->direct-deps]
+  (let [cycs (map #(find-cyclic-dep2 [%] k->direct-deps) (keys k->direct-deps))]
+    (map first
+         (vals
+          (group-by #(apply hash-map (flatten (partition 2 1 (take (inc (count %)) (cycle %)))))
+                    (map deref
+                         (filter identity
+                                 (flatten cycs))))))))
+
 (defn tf-checkout
   [file-path]
   (try
@@ -259,49 +331,34 @@
         [dir-path & wildcards] args]
     (println (line-count-of-files (glob-by-file-name recursive dir-path wildcards)))))
 
-(defn parse-csproj
+(defn parse-csproj-in-dir
   [dir-path & props]
-  (doseq [file (csproj-files dir-path)
-          :let [proj-path (.getPath file)
-                res (try
-                      (apply parse-csproj-file file props)
-                      (catch Exception _ (println "Error parsing:" proj-path)))]
-          :when res]
-    (println proj-path)
-    (println "TargetName:" (:TargetName res))
-    (println "TargetType:" (:TargetType res))
+  (doseq [[file-path info] (apply parse-csproj-files (csproj-files dir-path) props)]
+    (println file-path)
+    (println "TargetName:" (:TargetName info))
+    (println "TargetType:" (:TargetType info))
     (println "Dependencies:")
-    (doseq [dep (:Dependencies res)]
+    (doseq [dep (:Dependencies info)]
       (println "   " dep))))
 
-(defn parse-vcxproj
+(defn parse-vcxproj-in-dir
   [dir-path & props]
-  (doseq [file (vcxproj-files dir-path)
-          :let [proj-path (.getPath file)
-                res (try
-                      (apply parse-vcxproj-file file props)
-                      (catch Exception _ (println "Error parsing:" proj-path)))]
-          :when res]
-    (println proj-path)
-    (println "TargetName:" (:TargetName res))
-    (println "TargetType:" (:TargetType res))
+  (doseq [[file-path info] (apply parse-vcxproj-files (vcxproj-files dir-path) props)]
+    (println file-path)
+    (println "TargetName:" (:TargetName info))
+    (println "TargetType:" (:TargetType info))
     (println "Dependencies:")
-    (doseq [dep (:Dependencies res)]
+    (doseq [dep (:Dependencies info)]
       (println "   " dep))))
 
-(defn parse-cmake
+(defn parse-cmake-in-dir
   [dir-path]
-  (doseq [file (cmake-files dir-path)
-          :let [proj-path (.getPath file)
-                res (try
-                      (parse-cmake-file file)
-                      (catch Exception _ (println "Error parsing:" proj-path)))]
-          :when res]
-    (println proj-path)
-    (println "TargetName:" (:TargetName res))
-    (println "TargetType:" (:TargetType res))
+  (doseq [[file-path info] (parse-cmake-files (cmake-files dir-path))]
+    (println file-path)
+    (println "TargetName:" (:TargetName info))
+    (println "TargetType:" (:TargetType info))
     (println "Dependencies:")
-    (doseq [dep (:Dependencies res)]
+    (doseq [dep (:Dependencies info)]
       (println "   " dep))))
 
 (declare cmdlets)
@@ -326,15 +383,15 @@
    "parse-csproj"
    {:brief "Parse C# project files(*.csproj) in directory."
     :usage "Usage: parse-csproj <dir-path> [Property Value ...]  --  you can provide additional property and value such as Platform AnyCPU."
-    :fn parse-csproj}
+    :fn parse-csproj-in-dir}
    "parse-vcxproj"
    {:brief "Parse C++ project files(*.vcxproj) in directory."
     :usage "Usage: parse-vcxproj <dir-path> [Property Value ...]  --  you can provide additional property and value such as Platform x64."
-    :fn parse-vcxproj}
+    :fn parse-vcxproj-in-dir}
    "parse-cmake"
    {:brief "Parse CMakeLists.txt files in directory."
     :usage "Usage: parse-cmake <dir-path>"
-    :fn parse-cmake}
+    :fn parse-cmake-in-dir}
    "help"
    {:brief "Print this help."
     :usage "Usage: help [tool]"
