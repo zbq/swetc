@@ -115,7 +115,8 @@
        (assert (== (count nodes#) 1) (str "find more than one node by " '~form))
        (first nodes#))))
 
-(defn- parse-proj-file
+;; vs => visual studio
+(defn- parse-vsproj-file
   "return a map with keys: TargetName, TargetType(staticlibrary/library/exe), Dependencies."
   [file-path hook & props]
   (let [content (slurp file-path)
@@ -157,7 +158,7 @@
 
 (defn parse-vcxproj-file
   [file-path & props]
-  (apply parse-proj-file file-path "
+  (apply parse-vsproj-file file-path "
 <ItemGroup>
     <Link Include='Whatever' />
 </ItemGroup>
@@ -172,7 +173,7 @@
 
 (defn parse-csproj-file
   [file-path & props]
-  (let [res (apply parse-proj-file file-path "
+  (let [res (apply parse-vsproj-file file-path "
 <Target Name='SWETC-PARSE'>
     <Message Text='&lt;SWETC&gt;' Importance='High' />
     <Message Text='&lt;TargetName&gt;$(TargetName)&lt;/TargetName&gt;' Importance='High' />
@@ -241,7 +242,7 @@
                                      (path-normalize f)))
                         :let [info (try
                                      (apply parse-vcxproj-file file-path props)
-                                     (catch Exception _ nil))]
+                                     (catch Exception _ (println "Error parsing:" file-path)))]
                         :when info]
                     (list file-path info)))))
 
@@ -253,7 +254,7 @@
                                      (path-normalize f)))
                         :let [info (try
                                      (apply parse-csproj-file file-path props)
-                                     (catch Exception _ nil))]
+                                     (catch Exception _ (println "Error parsing:" file-path)))]
                         :when info]
                     (list file-path info)))))
 
@@ -265,9 +266,21 @@
                                      (path-normalize f)))
                         :let [info (try
                                      (apply parse-cmake-file file-path)
-                                     (catch Exception _ nil))]
+                                     (catch Exception _ (println "Error parsing:" file-path)))]
                         :when info]
                     (list file-path info)))))
+
+(defn map-target->proj
+  [proj->info]
+  (apply hash-map
+         (flatten (for [[proj info] proj->info]
+                    (list (:TargetName info) proj)))))
+
+(defn map-proj->direct-dep-projs
+  [proj->info target->proj]
+  (apply hash-map
+         (flatten (for [[proj info] proj->info]
+                    (list proj (set (filter identity (map target->proj (:Dependencies info)))))))))
 
 (defn- find-cyclic-dep1
   [dep-stack dep]
