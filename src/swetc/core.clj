@@ -6,6 +6,9 @@
   (:import [org.apache.commons.io FilenameUtils]
            [javax.xml.xpath XPathFactory XPath XPathConstants]
            [javax.xml.parsers DocumentBuilderFactory]
+           [javax.xml.transform TransformerFactory]
+           [javax.xml.transform.dom DOMSource]
+           [javax.xml.transform.stream StreamResult]
            [java.io IOException])
   (:gen-class))
 
@@ -88,19 +91,26 @@
   [dir-path]
   (glob-by-file-ext true dir-path #{"csproj"}))
 
-(defn- xml-doc-from-file
+(defn xml-doc-from-file
   [file-path]
   (let [dbf (DocumentBuilderFactory/newDefaultInstance)
         db (.newDocumentBuilder dbf)]
     (.parse db file-path)))
 
-(defn- xml-doc-from-string
+(defn xml-doc-from-string
   [content]
   (let [dbf (DocumentBuilderFactory/newDefaultInstance)
         db (.newDocumentBuilder dbf)]
     (.parse db (java.io.StringBufferInputStream. content))))
 
-(defn- eval-xpath
+(defn xml-doc-to-string
+  [xml-doc]
+  (let [factory (TransformerFactory/newInstance)
+        trans (.newTransformer factory)
+        dom (DOMSource. xml-doc)]
+    (with-out-str (.transform trans dom (StreamResult. *out*)))))
+
+(defn eval-xpath
   "return node list."
   [xml-doc expr]
   (let [xp (.newXPath (XPathFactory/newDefaultInstance))
@@ -309,6 +319,14 @@
                     (map deref
                          (filter identity
                                  (flatten cycs))))))))
+
+(defn tf-add
+  [file-path]
+  (try
+    (shell/sh "tf" "add" file-path)
+    (catch IOException e (do
+                           (println "No tf found!")
+                           (throw e)))))
 
 (defn tf-checkout
   [file-path]
