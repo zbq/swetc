@@ -6,6 +6,6 @@
   :dependencies [[org.clojure/clojure "1.10.1"]
                  [cmake-parser/cmake-parser "0.1.0"]
                  [commons-io/commons-io "2.6"]]
-  :main ^:skip-aot swetc.core
+  :main swetc.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}})
