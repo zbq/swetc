@@ -8,7 +8,7 @@
            [javax.xml.parsers DocumentBuilderFactory]
            [javax.xml.transform TransformerFactory]
            [javax.xml.transform.dom DOMSource]
-           [javax.xml.transform.stream StreamResult]
+           [javax.xml.transform.stream StreamSource StreamResult]
            [java.io IOException])
   (:gen-class))
 
@@ -124,6 +124,22 @@
      (do
        (assert (== (count nodes#) 1) (str "find more than one node by " '~form))
        (first nodes#))))
+
+(defn- string-input-stream
+  [s]
+  (-> (java.io.StringReader. s) clojure.lang.LineNumberingPushbackReader.))
+
+(defn xslt-transform
+  [xslt-str xml-str]
+  (let [factory (TransformerFactory/newInstance)
+        templates (.newTemplates factory (StreamSource.
+                                          (string-input-stream xslt-str)))
+        trans (.newTransformer templates)
+        source (StreamSource. (string-input-stream xml-str))
+        out (java.io.StringWriter.)
+        result (StreamResult. out)]
+    (.transform trans source result)
+    (str out)))
 
 ;; vs => visual studio
 (defn- parse-vsproj-file
