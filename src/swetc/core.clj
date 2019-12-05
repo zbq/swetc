@@ -4,12 +4,10 @@
             [clojure.java.shell :as shell]
             [cmake-parser.core :as cmake-parser])
   (:import [org.apache.commons.io FilenameUtils]
-           [javax.xml.xpath XPathFactory XPath XPathConstants]
-           [javax.xml.parsers DocumentBuilderFactory]
            [javax.xml.transform TransformerFactory]
-           [javax.xml.transform.dom DOMSource]
-           [javax.xml.transform.stream StreamSource StreamResult]
-           [java.io IOException])
+           [javax.xml.transform.stream StreamSource]
+           [org.dom4j.io SAXReader OutputFormat XMLWriter DocumentSource DocumentResult]
+           [java.io IOException FileWriter])
   (:gen-class))
 
 
@@ -49,7 +47,7 @@
   (for [file (list-files recursive dir-obj)
         :let [ext (FilenameUtils/getExtension (.getName file))]
         :when (some #(.equalsIgnoreCase ext %) exts)]
-    file))
+    (.getCanonicalPath file)))
 
 (defmethod glob-by-file-ext String
   [recursive dir-path exts]
@@ -73,7 +71,7 @@
   (for [file (list-files recursive dir-obj)
         :let [file-name (.getName file)]
         :when (some #(file-name-match? file-name %) matchers)]
-    file))
+    (.getCanonicalPath file)))
 
 (defmethod glob-by-file-name String
   [recursive dir-path matchers]
@@ -93,53 +91,37 @@
 
 (defn xml-doc-from-file
   [file-path]
-  (let [dbf (DocumentBuilderFactory/newDefaultInstance)
-        db (.newDocumentBuilder dbf)]
-    (.parse db file-path)))
+  (let [rdr (SAXReader.)]
+    (.read rdr (io/file file-path))))
 
 (defn xml-doc-from-string
   [content]
-  (let [dbf (DocumentBuilderFactory/newDefaultInstance)
-        db (.newDocumentBuilder dbf)]
-    (.parse db (java.io.StringBufferInputStream. content))))
+  (let [rdr (SAXReader.)]
+    (.read rdr (java.io.StringBufferInputStream. content))))
 
-(defn xml-doc-to-string
-  [xml-doc]
-  (let [factory (TransformerFactory/newInstance)
-        trans (.newTransformer factory)
-        dom (DOMSource. xml-doc)]
-    (with-out-str (.transform trans dom (StreamResult. *out*)))))
+(defn xml-doc-to-file
+  [xml-doc file-path]
+  (with-open [writer (XMLWriter. (FileWriter. file-path) (OutputFormat/createPrettyPrint))]
+    (.write writer xml-doc)))
 
-(defn eval-xpath
+(defn xml-doc-select-one
+  [xml-doc xpath]
+  (.selectSingleNode xml-doc xpath))
+
+(defn xml-doc-select
   "return node list."
-  [xml-doc expr]
-  (let [xp (.newXPath (XPathFactory/newDefaultInstance))
-        nodes (.evaluate xp expr xml-doc XPathConstants/NODESET)]
+  [xml-doc xpath]
+  (let [nodes (.selectNodes xml-doc xpath)]
     (for [i (range (.getLength nodes))]
       (.item nodes i))))
 
-(defmacro only-one-node
-  [form]
-  `(let [nodes# ~form]
-     (do
-       (assert (== (count nodes#) 1) (str "find more than one node by " '~form))
-       (first nodes#))))
-
-(defn- string-input-stream
-  [s]
-  (-> (java.io.StringReader. s) clojure.lang.LineNumberingPushbackReader.))
-
 (defn xslt-transform
-  [xslt-str xml-str]
+  [xml-doc xslt-file-path]
   (let [factory (TransformerFactory/newInstance)
-        templates (.newTemplates factory (StreamSource.
-                                          (string-input-stream xslt-str)))
-        trans (.newTransformer templates)
-        source (StreamSource. (string-input-stream xml-str))
-        out (java.io.StringWriter.)
-        result (StreamResult. out)]
-    (.transform trans source result)
-    (str out)))
+        trans (.newTransformer factory (StreamSource. xslt-file-path))
+        result (DocumentResult.)]
+    (.transform trans (DocumentSource. xml-doc) result)
+    (.getDocument result)))
 
 ;; vs => visual studio
 (defn- parse-vsproj-file
@@ -164,14 +146,11 @@
                   (+ (string/index-of res "</SWETC>") 8))
         xml-doc (xml-doc-from-string res)
         target-name (.getTextContent
-                     (only-one-node
-                      (eval-xpath xml-doc "//SWETC/TargetName")))
+                     (xml-doc-select-one xml-doc "//SWETC/TargetName"))
         target-type (.getTextContent
-                     (only-one-node
-                      (eval-xpath xml-doc "//SWETC/TargetType")))
+                     (xml-doc-select-one xml-doc "//SWETC/TargetType"))
         deps (string/split
-              (.getTextContent (only-one-node
-                                (eval-xpath xml-doc "//SWETC/Dependencies")))
+              (.getTextContent (xml-doc-select-one xml-doc "//SWETC/Dependencies"))
               #"[; \n]")
         deps (map #(string/trim %) deps)
         deps (apply sorted-set
@@ -256,9 +235,17 @@
   [path]
   (.getCanonicalPath (io/file path)))
 
+(defn path-parent
+  [path]
+  (.getParent (io/file (path-normalize path))))
+
 (defn path-file-name
   [path]
   (.getName (io/file path)))
+
+(defn path-exists
+  [path]
+  (.exists (io/file path)))
 
 (defn parse-vcxproj-files
   [file-paths & props]
