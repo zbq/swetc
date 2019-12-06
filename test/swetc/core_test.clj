@@ -25,3 +25,17 @@
               "TestY/B.vcxproj" #{"TestZ/C.vcxproj"}
               "TestZ/C.vcxproj" #{}})))))
 
+(deftest xml-test
+  (testing "xmlns & xpath"
+    (let [xmlstr "
+<root xmlns='http://github.com/zbq'>
+  <hello id='1'>world1</hello>
+  <hello id='2'>world2</hello>
+</root>"
+          xml-doc (xml-doc-from-string xmlstr)]
+      (is (= (xmlns-of-node (.getRootElement xml-doc))
+             "http://github.com/zbq"))
+      (is (= (xpath-select-one xml-doc "/root/hello[@id='1']/text()")
+             nil))
+      (is (= (.getText (xpath-select-one xml-doc "/n:root/n:hello[@id='1']/text()" {"n" "http://github.com/zbq"}))
+             "world1")))))
