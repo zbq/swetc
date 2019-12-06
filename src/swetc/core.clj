@@ -104,16 +104,24 @@
   (with-open [writer (XMLWriter. (FileWriter. file-path) (OutputFormat/createPrettyPrint))]
     (.write writer xml-doc)))
 
-(defn xml-doc-select-one
-  [xml-doc xpath]
-  (.selectSingleNode xml-doc xpath))
+(defn xmlns-of-node
+  [node]
+  (.getNamespaceURI node))
 
-(defn xml-doc-select
+(defn xpath-select-one
+  [node xpath-expr & [xpath-ns-map]]
+  (let [xpath (.createXPath node xpath-expr)]
+    (when xpath-ns-map
+      (.setNamespaceURIs xpath xpath-ns-map))
+    (.selectSingleNode xpath node)))
+
+(defn xpath-select
   "return node list."
-  [xml-doc xpath]
-  (let [nodes (.selectNodes xml-doc xpath)]
-    (for [i (range (.getLength nodes))]
-      (.item nodes i))))
+  [node xpath-expr & [xpath-ns-map]]
+  (let [xpath (.createXPath node xpath-expr)]
+    (when xpath-ns-map
+      (.setNamespaceURIs xpath xpath-ns-map))
+    (.selectNodes xpath node)))
 
 (defn xslt-transform
   [xml-doc xslt-file-path]
@@ -145,12 +153,12 @@
         res (subs res (string/index-of res "<SWETC>")
                   (+ (string/index-of res "</SWETC>") 8))
         xml-doc (xml-doc-from-string res)
-        target-name (.getTextContent
-                     (xml-doc-select-one xml-doc "//SWETC/TargetName"))
-        target-type (.getTextContent
-                     (xml-doc-select-one xml-doc "//SWETC/TargetType"))
+        target-name (.getText
+                     (xpath-select-one xml-doc "//SWETC/TargetName"))
+        target-type (.getText
+                     (xpath-select-one xml-doc "//SWETC/TargetType"))
         deps (string/split
-              (.getTextContent (xml-doc-select-one xml-doc "//SWETC/Dependencies"))
+              (.getText (xpath-select-one xml-doc "//SWETC/Dependencies"))
               #"[; \n]")
         deps (map #(string/trim %) deps)
         deps (apply sorted-set
