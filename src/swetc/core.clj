@@ -11,6 +11,22 @@
   (:gen-class))
 
 
+(defn path-normalize
+  [path]
+  (.getCanonicalPath (io/file path)))
+
+(defn path-parent
+  [path]
+  (.getParent (io/file (path-normalize path))))
+
+(defn path-file-name
+  [path]
+  (.getName (io/file path)))
+
+(defn path-exists
+  [path]
+  (.exists (io/file path)))
+
 (defmulti line-count-of-file
   "return line count of file."
   class)
@@ -88,6 +104,16 @@
 (defn csproj-files
   [dir-path]
   (glob-by-file-ext true dir-path #{"csproj"}))
+
+(defn sln-files
+  [dir-path]
+  (glob-by-file-ext true dir-path #{"sln"}))
+
+(defn projs-of-sln
+  [sln]
+  (let [dir (path-parent sln)]
+    (map #(str dir File/separator (second %))
+         (re-seq #"Project.+\"([^\"]+proj)" (slurp sln)))))
 
 (defn xml-doc-from-file
   [file-path]
@@ -238,22 +264,6 @@
                        (disj "PUBLIC")
                        (disj "INTERFACE"))}
     ))
-
-(defn path-normalize
-  [path]
-  (.getCanonicalPath (io/file path)))
-
-(defn path-parent
-  [path]
-  (.getParent (io/file (path-normalize path))))
-
-(defn path-file-name
-  [path]
-  (.getName (io/file path)))
-
-(defn path-exists
-  [path]
-  (.exists (io/file path)))
 
 (defn parse-vcxproj-files
   [file-paths & props]

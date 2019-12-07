@@ -7,7 +7,7 @@
                  [cmake-parser/cmake-parser "0.1.0"]
                  [commons-io/commons-io "2.6"]
                  [org.dom4j/dom4j "2.1.1"]
-                 [jaxen/jaxen "1.1.6"]]
+                 [jaxen/jaxen "1.2.0"]]
   :main swetc.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}})
