@@ -112,7 +112,7 @@
 (defn projs-of-sln
   [sln]
   (let [dir (path-parent sln)]
-    (map #(str dir File/separator (second %))
+    (map #(str dir java.io.File/separator (second %))
          (re-seq #"Project.+\"([^\"]+proj)" (slurp sln)))))
 
 (defn xml-doc-from-file

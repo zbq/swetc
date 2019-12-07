@@ -39,3 +39,13 @@
              nil))
       (is (= (.getText (xpath-select-one xml-doc "/n:root/n:hello[@id='1']/text()" {"n" "http://github.com/zbq"}))
              "world1")))))
+
+(deftest xml-quote-test
+  (testing "xml quote"
+    (let [xmlstr "
+<root>
+  <hello id='&quot;I&apos;m id&quot;'>world</hello>
+</root>"
+          xml-doc (xml-doc-from-string xmlstr)]
+      (is (= (.getText (xpath-select-one xml-doc "/root/hello/@id"))
+             "\"I'm id\"")))))
