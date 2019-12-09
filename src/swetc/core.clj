@@ -27,6 +27,18 @@
   [path]
   (.exists (io/file path)))
 
+(defn file-exists
+  [file-path]
+  (.isFile (io/file file-path)))
+
+(defn map-of-entries
+  [entries]
+  (loop [m {} entries entries]
+    (if (seq entries)
+      (recur (assoc m (key (first entries)) (val (first entries)))
+             (next entries))
+      m)))
+
 (defmulti line-count-of-file
   "return line count of file."
   class)
@@ -112,8 +124,10 @@
 (defn projs-of-sln
   [sln]
   (let [dir (path-parent sln)]
-    (map #(str dir java.io.File/separator (second %))
-         (re-seq #"Project.+\"([^\"]+proj)" (slurp sln)))))
+    (map path-normalize
+         (map #(str dir java.io.File/separator (second %))
+              (re-seq #"Project[^,]+,[^\"]*\"([^\"]+)\""
+                      (slurp sln))))))
 
 (defn xml-doc-from-file
   [file-path]
@@ -208,7 +222,7 @@
     <Message Text='&lt;Dependencies&gt;%(Link.AdditionalDependencies)&lt;/Dependencies&gt;' Importance='High' />
     <Message Text='&lt;/SWETC&gt;' Importance='High' />
 </Target>
-" "Configuration" "Release" "Platform" "x64" props))
+" "Configuration" "Release" props))
 
 (defn parse-csproj-file
   [file-path & props]
@@ -220,7 +234,7 @@
     <Message Text='&lt;Dependencies&gt;@(Reference)&lt;/Dependencies&gt;' Importance='High' />
     <Message Text='&lt;/SWETC&gt;' Importance='High' />
 </Target>
-" "Configuration" "Release" "Platform" "AnyCPU" props)
+" "Configuration" "Release" props)
         target-type (string/lower-case (:TargetType res))
         target-type (if (= target-type "winexe")
                       "exe"
@@ -267,51 +281,51 @@
 
 (defn parse-vcxproj-files
   [file-paths & props]
-  (apply hash-map
-         (flatten (for [file-path (distinct
-                                   (for [f file-paths]
-                                     (path-normalize f)))
-                        :let [info (try
-                                     (apply parse-vcxproj-file file-path props)
-                                     (catch Exception _ (println "Error parsing:" file-path)))]
-                        :when info]
-                    (list file-path info)))))
+  (map-of-entries
+   (for [file-path (distinct
+                    (for [f file-paths]
+                      (path-normalize f)))
+         :let [info (try
+                      (apply parse-vcxproj-file file-path props)
+                      (catch Exception _ (println "Error parsing:" file-path)))]
+         :when info]
+     (clojure.lang.MapEntry. file-path info))))
 
 (defn parse-csproj-files
   [file-paths & props]
-  (apply hash-map
-         (flatten (for [file-path (distinct
-                                   (for [f file-paths]
-                                     (path-normalize f)))
-                        :let [info (try
-                                     (apply parse-csproj-file file-path props)
-                                     (catch Exception _ (println "Error parsing:" file-path)))]
-                        :when info]
-                    (list file-path info)))))
+  (map-of-entries
+   (for [file-path (distinct
+                    (for [f file-paths]
+                      (path-normalize f)))
+         :let [info (try
+                      (apply parse-csproj-file file-path props)
+                      (catch Exception _ (println "Error parsing:" file-path)))]
+         :when info]
+     (clojure.lang.MapEntry. file-path info))))
 
 (defn parse-cmake-files
   [file-paths]
-  (apply hash-map
-         (flatten (for [file-path (distinct
-                                   (for [f file-paths]
-                                     (path-normalize f)))
-                        :let [info (try
-                                     (apply parse-cmake-file file-path)
-                                     (catch Exception _ (println "Error parsing:" file-path)))]
-                        :when info]
-                    (list file-path info)))))
+  (map-of-entries
+   (for [file-path (distinct
+                    (for [f file-paths]
+                      (path-normalize f)))
+         :let [info (try
+                      (apply parse-cmake-file file-path)
+                      (catch Exception _ (println "Error parsing:" file-path)))]
+         :when info]
+     (clojure.lang.MapEntry. file-path info))))
 
 (defn map-target->proj
   [proj->info]
-  (apply hash-map
-         (flatten (for [[proj info] proj->info]
-                    (list (:TargetName info) proj)))))
+  (map-of-entries
+   (for [[proj info] proj->info]
+     (clojure.lang.MapEntry. (:TargetName info) proj))))
 
 (defn map-proj->direct-dep-projs
   [proj->info target->proj]
-  (apply hash-map
-         (flatten (for [[proj info] proj->info]
-                    (list proj (set (filter identity (map target->proj (:Dependencies info)))))))))
+  (map-of-entries
+   (for [[proj info] proj->info]
+     (clojure.lang.MapEntry. proj (remove nil? (map target->proj (:Dependencies info)))))))
 
 (defn- find-cyclic-dep1
   [dep-stack dep]

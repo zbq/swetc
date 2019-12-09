@@ -21,11 +21,11 @@
               "B" "TestY/B.vcxproj",
               "C" "TestZ/C.vcxproj"}))
       (is (= proj->direct-dep-projs
-             {"TestX/A.vcxproj" #{"TestY/B.vcxproj"}
-              "TestY/B.vcxproj" #{"TestZ/C.vcxproj"}
-              "TestZ/C.vcxproj" #{}})))))
+             {"TestX/A.vcxproj" (list "TestY/B.vcxproj")
+              "TestY/B.vcxproj" (list "TestZ/C.vcxproj")
+              "TestZ/C.vcxproj" ()})))))
 
-(deftest xml-test
+(deftest xmlns-test
   (testing "xmlns & xpath"
     (let [xmlstr "
 <root xmlns='http://github.com/zbq'>
@@ -49,3 +49,10 @@
           xml-doc (xml-doc-from-string xmlstr)]
       (is (= (.getText (xpath-select-one xml-doc "/root/hello/@id"))
              "\"I'm id\"")))))
+
+(deftest map-of-entries-test
+  (testing "map-of-entries"
+    (is (= (map-of-entries [(clojure.lang.MapEntry. 1 2)
+                            (clojure.lang.MapEntry. 2 3)])
+           {1 2, 2 3}))))
+
