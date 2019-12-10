@@ -125,9 +125,10 @@
   [sln]
   (let [dir (path-parent sln)]
     (map path-normalize
-         (map #(str dir java.io.File/separator (second %))
-              (re-seq #"Project[^,]+,[^\"]*\"([^\"]+)\""
-                      (slurp sln))))))
+         (filter #(file-exists %)
+                 (map #(str dir java.io.File/separator (second %))
+                      (re-seq #"Project[^,]+,[^\"]*\"([^\"]+)\""
+                              (slurp sln)))))))
 
 (defn xml-doc-from-file
   [file-path]
@@ -325,7 +326,7 @@
   [proj->info target->proj]
   (map-of-entries
    (for [[proj info] proj->info]
-     (clojure.lang.MapEntry. proj (remove nil? (map target->proj (:Dependencies info)))))))
+     (clojure.lang.MapEntry. proj (distinct (remove nil? (map target->proj (:Dependencies info))))))))
 
 (defn- find-cyclic-dep1
   [dep-stack dep]
