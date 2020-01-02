@@ -7,29 +7,47 @@
            [javax.xml.transform TransformerFactory]
            [javax.xml.transform.stream StreamSource]
            [org.dom4j.io SAXReader OutputFormat XMLWriter DocumentSource DocumentResult]
-           [java.io IOException FileWriter])
+           [java.io IOException FileWriter]
+           [java.nio.file Files FileVisitOption Path Paths])
   (:gen-class))
 
 
-(defn path-normalize
+(defn path-of
+  [first & rest]
+  (.normalize (Paths/get (str first) (into-array String (map str rest)))))
+
+(defn path-to-absolute
   [path]
-  (.getCanonicalPath (io/file path)))
+  (.toAbsolutePath path))
 
 (defn path-parent
   [path]
-  (.getParent (io/file (path-normalize path))))
+  (.getParent path))
 
 (defn path-file-name
   [path]
-  (.getName (io/file path)))
+  (.toString (.getFileName path)))
 
 (defn path-exists
   [path]
-  (.exists (io/file path)))
+  (.exists (.toFile path)))
 
-(defn file-exists
-  [file-path]
-  (.isFile (io/file file-path)))
+(defn path-is-file
+  [path]
+  (.isFile (.toFile path)))
+
+(defn path-is-dir
+  [path]
+  (.isDirectory (.toFile path)))
+
+(defn path-files
+  [dir-path recursive]
+  (->> (if recursive
+         (Files/walk dir-path (into-array FileVisitOption (list FileVisitOption/FOLLOW_LINKS)))
+         (Files/list dir-path))
+       (.iterator)
+       (iterator-seq)
+       (filter #(path-is-file %))))
 
 (defn map-of-entries
   [entries]
@@ -39,47 +57,24 @@
              (next entries))
       m)))
 
-(defmulti line-count-of-file
-  "return line count of file."
-  class)
-
-(defmethod line-count-of-file java.io.File
-  [file-obj]
+(defn line-count-of-file
+  [file-path]
   (try
-    (with-open [rdr (io/reader file-obj)]
+    (with-open [rdr (io/reader (.toFile file-path))]
       (count (line-seq rdr)))
     (catch Exception _ 0)))
 
-(defmethod line-count-of-file String
-  [file-path]
-  (line-count-of-file (io/file file-path)))
-
 (defn line-count-of-files
-  [files]
-  (reduce + (map line-count-of-file files)))
+  [file-paths]
+  (reduce + (map line-count-of-file file-paths)))
 
-(defn- list-files
-  [recursive dir-obj]
-  (filter #(.isFile %)
-          (if recursive
-            (file-seq dir-obj)
-            (.listFiles dir-obj))))
-
-(defmulti glob-by-file-ext
-  "glob by file extension."
-  (fn [recursive dir exts]
-    (class dir)))
-
-(defmethod glob-by-file-ext java.io.File
-  [recursive dir-obj exts]
-  (for [file (list-files recursive dir-obj)
-        :let [ext (FilenameUtils/getExtension (.getName file))]
+(defn glob-by-file-ext
+  "glob by file extension, return Path list."
+  [dir-path exts recursive]
+  (for [file-path (path-files dir-path recursive)
+        :let [ext (FilenameUtils/getExtension (path-file-name file-path))]
         :when (some #(.equalsIgnoreCase ext %) exts)]
-    (.getCanonicalPath file)))
-
-(defmethod glob-by-file-ext String
-  [recursive dir-path exts]
-  (glob-by-file-ext recursive (io/file dir-path) exts))
+    file-path))
 
 (defn- file-name-match?
   [file-name matcher]
@@ -89,51 +84,42 @@
     ;; regex pattern
     (re-matches matcher file-name)))
 
-(defmulti glob-by-file-name
-  "glob by file name wildcard or regex pattern."
-  (fn [recursive dir matchers]
-    (class dir)))
-
-(defmethod glob-by-file-name java.io.File
-  [recursive dir-obj matchers]
-  (for [file (list-files recursive dir-obj)
-        :let [file-name (.getName file)]
+(defn glob-by-file-name
+  "glob by file name wildcard or regex pattern, return Path list."
+  [dir-path matchers recursive]
+  (for [file-path (path-files dir-path recursive)
+        :let [file-name (path-file-name file-path)]
         :when (some #(file-name-match? file-name %) matchers)]
-    (.getCanonicalPath file)))
-
-(defmethod glob-by-file-name String
-  [recursive dir-path matchers]
-  (glob-by-file-name recursive (io/file dir-path) matchers))
+    file-path))
 
 (defn cmake-files
   [dir-path]
-  (glob-by-file-name true dir-path #{"CMakeLists.txt"}))
+  (glob-by-file-name dir-path #{"CMakeLists.txt"} true))
 
 (defn vcxproj-files
   [dir-path]
-  (glob-by-file-ext true dir-path #{"vcxproj"}))
+  (glob-by-file-ext dir-path #{"vcxproj"} true))
 
 (defn csproj-files
   [dir-path]
-  (glob-by-file-ext true dir-path #{"csproj"}))
+  (glob-by-file-ext dir-path #{"csproj"} true))
 
 (defn sln-files
   [dir-path]
-  (glob-by-file-ext true dir-path #{"sln"}))
+  (glob-by-file-ext dir-path #{"sln"} true))
 
 (defn projs-of-sln
-  [sln]
-  (let [dir (path-parent sln)]
-    (map path-normalize
-         (filter #(file-exists %)
-                 (map #(str dir java.io.File/separator (second %))
-                      (re-seq #"Project[^,]+,[^\"]*\"([^\"]+)\""
-                              (slurp sln)))))))
+  [sln-path]
+  (let [dir (path-parent sln-path)]
+    (filter #(path-is-file %)
+            (map #(path-of dir (second %))
+                 (re-seq #"Project[^,]+,[^\"]*\"([^\"]+)\""
+                         (slurp (.toFile sln-path)))))))
 
 (defn xml-doc-from-file
-  [file-path]
+  [xml-path]
   (let [rdr (SAXReader.)]
-    (.read rdr (io/file file-path))))
+    (.read rdr (.toFile xml-path))))
 
 (defn xml-doc-from-string
   [content]
@@ -141,8 +127,8 @@
     (.read rdr (java.io.StringBufferInputStream. content))))
 
 (defn xml-doc-to-file
-  [xml-doc file-path]
-  (with-open [writer (XMLWriter. (FileWriter. file-path) (OutputFormat/createPrettyPrint))]
+  [xml-doc xml-path]
+  (with-open [writer (XMLWriter. (FileWriter. (str xml-path)) (OutputFormat/createPrettyPrint))]
     (.write writer xml-doc)))
 
 (defn xmlns-of-node
@@ -165,20 +151,31 @@
     (.selectNodes xpath node)))
 
 (defn xslt-transform
-  [xml-doc xslt-file-path]
+  [xml-doc xslt-path]
   (let [factory (TransformerFactory/newInstance)
-        trans (.newTransformer factory (StreamSource. xslt-file-path))
+        trans (.newTransformer factory (StreamSource. (str xslt-path)))
         result (DocumentResult.)]
     (.transform trans (DocumentSource. xml-doc) result)
     (.getDocument result)))
 
+(defn- vsproj-default-props
+  [proj-path]
+  (let [xml-doc (xml-doc-from-file proj-path)
+        xmlns (xmlns-of-node (.getRootElement xml-doc))
+        conf_node (xpath-select-one xml-doc "/n:Project/n:PropertyGroup/n:Configuration" {"n" xmlns})
+        conf (if conf_node (.getText conf_node) "Release")
+        platform_node (xpath-select-one xml-doc "/n:Project/n:PropertyGroup/n:Platform" {"n" xmlns})
+        platform (if platform_node (.getText platform_node) "x64")]
+    (list "Configuration" conf "Platform" platform)))
+
 ;; vs => visual studio
 (defn- parse-vsproj-file
   "return a map with keys: TargetName, TargetType(staticlibrary/library/exe), Dependencies."
-  [file-path hook & props]
-  (let [content (slurp file-path)
+  [proj-path hook & props]
+  (let [props (concat (vsproj-default-props proj-path) props)
+        content (slurp (.toFile proj-path))
         index (string/last-index-of content "</Project>")
-        tmp-proj-file-path (str file-path "-swetc-tmp")
+        tmp-proj-file-path (str proj-path "-swetc-tmp")
         tmp-content (str (subs content 0 index) hook "</Project>")
         _ (spit tmp-proj-file-path tmp-content)
         res (try
@@ -186,9 +183,9 @@
                      "/nologo" "/v:minimal" "/t:SWETC-PARSE"
                      (for [[name val] (apply hash-map props)]
                        (str "/p:" name "=" val)))
-              (catch IOException e (do
-                                     (println "No msbuild found!")
-                                     (throw e)))
+              (catch IOException e
+                (println "No msbuild found!")
+                (throw e))
               (finally (io/delete-file tmp-proj-file-path true)))
         res (:out res)
         res (subs res (string/index-of res "<SWETC>")
@@ -211,8 +208,8 @@
      :Dependencies deps}))
 
 (defn parse-vcxproj-file
-  [file-path & props]
-  (apply parse-vsproj-file file-path "
+  [proj-path & props]
+  (apply parse-vsproj-file proj-path "
 <ItemGroup>
     <Link Include='Whatever' />
 </ItemGroup>
@@ -226,8 +223,8 @@
 " "Configuration" "Release" props))
 
 (defn parse-csproj-file
-  [file-path & props]
-  (let [res (apply parse-vsproj-file file-path "
+  [proj-path & props]
+  (let [res (apply parse-vsproj-file proj-path "
 <Target Name='SWETC-PARSE'>
     <Message Text='&lt;SWETC&gt;' Importance='High' />
     <Message Text='&lt;TargetName&gt;$(TargetName)&lt;/TargetName&gt;' Importance='High' />
@@ -247,7 +244,7 @@
 
 (defn parse-cmake-file
   [file-path]
-  (let [invocs (cmake-parser/parse-file file-path)
+  (let [invocs (cmake-parser/parse-file (str file-path))
         bindings (transient {})
         target-name (atom "")
         target-type (atom "")
@@ -281,40 +278,40 @@
     ))
 
 (defn parse-vcxproj-files
-  [file-paths & props]
+  [proj-paths & props]
   (map-of-entries
-   (for [file-path (distinct
-                    (for [f file-paths]
-                      (path-normalize f)))
+   (for [proj-path proj-paths
          :let [info (try
-                      (apply parse-vcxproj-file file-path props)
-                      (catch Exception _ (println "Error parsing:" file-path)))]
+                      (apply parse-vcxproj-file proj-path props)
+                      (catch Exception e
+                        (println "Error parsing:" (str proj-path))
+                        (println e)))]
          :when info]
-     (clojure.lang.MapEntry. file-path info))))
+     (clojure.lang.MapEntry. (str proj-path) info))))
 
 (defn parse-csproj-files
-  [file-paths & props]
+  [proj-paths & props]
   (map-of-entries
-   (for [file-path (distinct
-                    (for [f file-paths]
-                      (path-normalize f)))
+   (for [proj-path proj-paths
          :let [info (try
-                      (apply parse-csproj-file file-path props)
-                      (catch Exception _ (println "Error parsing:" file-path)))]
+                      (apply parse-csproj-file proj-path props)
+                      (catch Exception e
+                        (println "Error parsing:" (str proj-path))
+                        (println e)))]
          :when info]
-     (clojure.lang.MapEntry. file-path info))))
+     (clojure.lang.MapEntry. (str proj-path) info))))
 
 (defn parse-cmake-files
   [file-paths]
   (map-of-entries
-   (for [file-path (distinct
-                    (for [f file-paths]
-                      (path-normalize f)))
+   (for [file-path file-paths
          :let [info (try
-                      (apply parse-cmake-file file-path)
-                      (catch Exception _ (println "Error parsing:" file-path)))]
+                      (parse-cmake-file file-path)
+                      (catch Exception e
+                        (println "Error parsing:" file-path)
+                        (println e)))]
          :when info]
-     (clojure.lang.MapEntry. file-path info))))
+     (clojure.lang.MapEntry. (str file-path) info))))
 
 (defn map-target->proj
   [proj->info]
@@ -357,36 +354,36 @@
                                  (flatten cycs))))))))
 
 (defn tf-add
-  [file-path]
+  [file]
   (try
-    (shell/sh "tf" "add" file-path)
-    (catch IOException e (do
-                           (println "No tf found!")
-                           (throw e)))))
+    (shell/sh "tf" "add" file)
+    (catch IOException e
+      (println "No tf found!")
+      (throw e))))
 
 (defn tf-checkout
-  [file-path]
+  [file]
   (try
-    (shell/sh "tf" "checkout" file-path)
-    (catch IOException e (do
-                           (println "No tf found!")
-                           (throw e)))))
+    (shell/sh "tf" "checkout" file)
+    (catch IOException e
+      (println "No tf found!")
+      (throw e))))
 
 (defn tf-rename
   [from to]
   (try
     (shell/sh "tf" "rename" from to)
-    (catch IOException e (do
-                           (println "No tf found!")
-                           (throw e)))))
+    (catch IOException e
+      (println "No tf found!")
+      (throw e))))
 
 (defn tf-undo
-  [file-path]
+  [file]
   (try
-    (shell/sh "tf" "undo" "/noprompt" file-path)
-    (catch IOException e (do
-                           (println "No tf found!")
-                           (throw e)))))
+    (shell/sh "tf" "undo" "/noprompt" file)
+    (catch IOException e
+      (println "No tf found!")
+      (throw e))))
 
 (defn line-count
   [& args]
@@ -395,13 +392,13 @@
     (throw (java.lang.IllegalArgumentException.)))
   (let [recursive (= "-r" (first args))
         args (if recursive (rest args) args)
-        [dir-path & wildcards] args]
-    (println (line-count-of-files (glob-by-file-name recursive dir-path wildcards)))))
+        [dir & wildcards] args]
+    (println (line-count-of-files (glob-by-file-name (path-of dir) wildcards recursive)))))
 
 (defn parse-csproj-in-dir
-  [dir-path & props]
-  (doseq [[file-path info] (apply parse-csproj-files (csproj-files dir-path) props)]
-    (println file-path)
+  [dir & props]
+  (doseq [[proj info] (apply parse-csproj-files (csproj-files (path-of dir)) props)]
+    (println proj)
     (println "TargetName:" (:TargetName info))
     (println "TargetType:" (:TargetType info))
     (println "Dependencies:")
@@ -409,9 +406,9 @@
       (println "   " dep))))
 
 (defn parse-vcxproj-in-dir
-  [dir-path & props]
-  (doseq [[file-path info] (apply parse-vcxproj-files (vcxproj-files dir-path) props)]
-    (println file-path)
+  [dir & props]
+  (doseq [[proj info] (apply parse-vcxproj-files (vcxproj-files (path-of dir)) props)]
+    (println proj)
     (println "TargetName:" (:TargetName info))
     (println "TargetType:" (:TargetType info))
     (println "Dependencies:")
@@ -419,9 +416,9 @@
       (println "   " dep))))
 
 (defn parse-cmake-in-dir
-  [dir-path]
-  (doseq [[file-path info] (parse-cmake-files (cmake-files dir-path))]
-    (println file-path)
+  [dir]
+  (doseq [[proj info] (parse-cmake-files (cmake-files (path-of dir)))]
+    (println proj)
     (println "TargetName:" (:TargetName info))
     (println "TargetType:" (:TargetType info))
     (println "Dependencies:")
