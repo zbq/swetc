@@ -308,7 +308,7 @@
          :let [info (try
                       (parse-cmake-file file-path)
                       (catch Exception e
-                        (println "Error parsing:" file-path)
+                        (println "Error parsing:" (str file-path))
                         (println e)))]
          :when info]
      (clojure.lang.MapEntry. (str file-path) info))))
